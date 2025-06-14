@@ -79,6 +79,7 @@ class MCPClient:
                 # Execute tool call
                 result = await self.session.call_tool(tool_name, tool_args)
                 final_text.append(f"[Calling tool {tool_name} with args {tool_args}]")
+                logger.info(f"calling tool {tool_name} with args {tool_args}")
 
                 messages.append({
                     "role": "assistant",
@@ -98,6 +99,8 @@ class MCPClient:
                     }]
                 })
                 final_text.append(f"[Tool call result: {result.content[0].text}]")
+
+                logger.info(f"Tool call result: {result.content[0].text}")
 
                 # Get next response from Claude
                 response = self.anthropic.messages.create(
