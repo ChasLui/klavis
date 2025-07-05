@@ -14,11 +14,15 @@ dotenv.config();
 
 // Create AsyncLocalStorage for request context
 const asyncLocalStorage = new AsyncLocalStorage<{
-  resendClient: Resend;
+  apiKey: string;
 }>();
 
 function getResendClient() {
-  return asyncLocalStorage.getStore()!.resendClient;
+  const store = asyncLocalStorage.getStore();
+  if (!store) {
+    throw new Error('API key not found in AsyncLocalStorage');
+  }
+  return new Resend(store.apiKey);
 }
 
 const getResendMcpServer = () => {
@@ -86,14 +90,6 @@ const getResendMcpServer = () => {
         throw new Error("from argument must be provided.");
       }
 
-      // Similar type check for "reply-to" email addresses.
-      if (
-        typeof replyToEmailAddresses !== "string" &&
-        !Array.isArray(replyToEmailAddresses)
-      ) {
-        throw new Error("replyTo argument must be provided.");
-      }
-
       console.error(`Debug - Sending email with from: ${fromEmailAddress}`);
 
       // Explicitly structure the request with all parameters to ensure they're passed correctly
@@ -102,7 +98,7 @@ const getResendMcpServer = () => {
         subject: string;
         text: string;
         from: string;
-        replyTo: string | string[];
+        replyTo?: string | string[];
         html?: string;
         scheduledAt?: string;
         cc?: string[];
@@ -112,10 +108,13 @@ const getResendMcpServer = () => {
         subject,
         text,
         from: fromEmailAddress,
-        replyTo: replyToEmailAddresses,
       };
 
       // Add optional parameters conditionally
+      if (replyToEmailAddresses) {
+        emailRequest.replyTo = replyToEmailAddresses;
+      }
+
       if (html) {
         emailRequest.html = html;
       }
@@ -682,7 +681,7 @@ const getResendMcpServer = () => {
 }
 
 const app = express();
-app.use(express.json());
+
 
 //=============================================================================
 // STREAMABLE HTTP TRANSPORT (PROTOCOL VERSION 2025-03-26)
@@ -692,19 +691,7 @@ app.post('/mcp', async (req: Request, res: Response) => {
   const apiKey = process.env.RESEND_API_KEY || req.headers['x-auth-token'] as string;
   if (!apiKey) {
     console.error('Error: Resend API key is missing. Provide it via x-auth-token header.');
-    const errorResponse = {
-      jsonrpc: '2.0' as '2.0',
-      error: {
-        code: -32001,
-        message: 'Unauthorized, Resend API key is missing. Have you set the Resend API key?'
-      },
-      id: 0
-    };
-    res.status(401).json(errorResponse);
-    return;
   }
-
-  const resendClient = new Resend(apiKey);
 
   const server = getResendMcpServer();
   try {
@@ -712,7 +699,7 @@ app.post('/mcp', async (req: Request, res: Response) => {
       sessionIdGenerator: undefined,
     });
     await server.connect(transport);
-    asyncLocalStorage.run({ resendClient }, async () => {
+    asyncLocalStorage.run({ apiKey }, async () => {
       await transport.handleRequest(req, res, req.body);
     });
     res.on('close', () => {
@@ -794,24 +781,10 @@ app.post("/messages", async (req, res) => {
     const apiKey = process.env.RESEND_API_KEY || req.headers['x-auth-token'] as string;
     if (!apiKey) {
       console.error('Error: Resend API key is missing. Provide it via x-auth-token header.');
-      const errorResponse = {
-        jsonrpc: '2.0' as '2.0',
-        error: {
-          code: -32001,
-          message: 'Unauthorized, Resend API key is missing. Have you set the Resend API key?'
-        },
-        id: 0
-      };
-      await transport.send(errorResponse);
-      await transport.close();
-      res.status(401).end(JSON.stringify({ error: "Unauthorized, Resend API key is missing. Have you set the Resend API key?" }));
-      return;
     }
 
-    const resendClient = new Resend(apiKey);
-
-    asyncLocalStorage.run({ resendClient }, async () => {
-      await transport.handlePostMessage(req, res);
+    asyncLocalStorage.run({ apiKey }, async () => {
+      await transport!.handlePostMessage(req, res);
     });
   } else {
     console.error(`Transport not found for session ID: ${sessionId}`);

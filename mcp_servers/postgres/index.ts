@@ -128,22 +128,30 @@ const getPostgresMcpServer = () => {
   return server;
 }
 
-// Create AsyncLocalStorage for request context
+// Create AsyncLocalStorage for request context - now only storing databaseUrl
 const asyncLocalStorage = new AsyncLocalStorage<{
-  resourceBaseUrl: URL;
-  pool: pg.Pool;
+  databaseUrl: string;
 }>();
 
+// Create resourceBaseUrl when needed
 function getResourceBaseUrl() {
-  return asyncLocalStorage.getStore()!.resourceBaseUrl;
+  const databaseUrl = asyncLocalStorage.getStore()!.databaseUrl;
+  const resourceBaseUrl = new URL(databaseUrl);
+  resourceBaseUrl.protocol = "postgres:";
+  resourceBaseUrl.password = "";
+  return resourceBaseUrl;
 }
 
+// Create pool when needed
 function getPool() {
-  return asyncLocalStorage.getStore()!.pool;
+  const databaseUrl = asyncLocalStorage.getStore()!.databaseUrl;
+  return new pg.Pool({
+    connectionString: databaseUrl,
+  });
 }
 
 const app = express();
-app.use(express.json());
+
 
 //=============================================================================
 // STREAMABLE HTTP TRANSPORT (PROTOCOL VERSION 2025-03-26)
@@ -154,26 +162,7 @@ app.post('/mcp', async (req: Request, res: Response) => {
 
   if (!databaseUrl) {
     console.error('Error: Postgres database URL is missing. Provide it via DATABASE_URL env var or x-auth-token header.');
-    const errorResponse = {
-      jsonrpc: '2.0' as '2.0',
-      error: {
-        code: -32001,
-        message: 'Unauthorized, Postgres database URL is missing. Have you set the Postgres database URL?'
-      },
-      id: 0
-    };
-    res.status(401).json(errorResponse);
-    return;
   }
-
-  const resourceBaseUrl = new URL(databaseUrl);
-  resourceBaseUrl.protocol = "postgres:";
-  resourceBaseUrl.password = "";
-
-  const pool = new pg.Pool({
-    connectionString: databaseUrl,
-  });
-
 
   const server = getPostgresMcpServer();
   try {
@@ -181,7 +170,7 @@ app.post('/mcp', async (req: Request, res: Response) => {
       sessionIdGenerator: undefined,
     });
     await server.connect(transport);
-    asyncLocalStorage.run({ resourceBaseUrl, pool }, async () => {
+    asyncLocalStorage.run({ databaseUrl }, async () => {
       await transport.handleRequest(req, res, req.body);
     });
     res.on('close', () => {
@@ -264,28 +253,9 @@ app.post("/messages", async (req, res) => {
 
     if (!databaseUrl) {
       console.error('Error: Postgres database URL is missing. Provide it via DATABASE_URL env var or x-auth-token header.');
-      const errorResponse = {
-        jsonrpc: '2.0' as '2.0',
-        error: {
-          code: -32001,
-          message: 'Unauthorized, Postgres database URL is missing. Have you set the Postgres database URL?'
-        },
-        id: 0
-      };
-      await transport.send(errorResponse);
-      await transport.close();
-      res.status(401).end(JSON.stringify({ error: "Unauthorized, Postgres database URL is missing. Have you set the Postgres database URL?" }));
-      return;
     }
 
-    const resourceBaseUrl = new URL(databaseUrl);
-    resourceBaseUrl.protocol = "postgres:";
-    resourceBaseUrl.password = "";
-
-    const pool = new pg.Pool({
-      connectionString: databaseUrl,
-    });
-    asyncLocalStorage.run({ resourceBaseUrl, pool }, async () => {
+    asyncLocalStorage.run({ databaseUrl }, async () => {
       await transport.handlePostMessage(req, res);
     });
   } else {
